@@ -1,0 +1,869 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2019_conference,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+\usepackage{graphicx}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{cleveref}
+\usepackage{enumitem}
+\usepackage{soul}
+\usepackage{dsfont}
+\usepackage{caption}
+\usepackage{lipsum}
+\usepackage{thmtools,thm-restate}
+\usepackage[none]{hyphenat}
+\newtheorem{lemma}{Lemma}
+\crefname{lemma}{Lemma}{Lemmas}
+
+\newcommand{\red}[1]{{\color{red}#1}}
+
+
+\newcommand{\Le}[1]{{\color{red}{\bf\sf [ #1]}}}
+\newcommand{\xc}[1]{{\color{blue}{\bf\sf #1}}}
+\newcommand{\xinshi}[1]{{\color{black}{#1}}}
+\newcommand{\shuang}[1]{{\color{purple}{\bf\sf[ #1]}}}
+% \newcommand{\shuang}[1]{{\color{purple}{\bf\sf}}}
+\newcommand{\Li}[1]{{\color{cyan}{\bf\sf [Li: #1]}}}
+
+
+\graphicspath{{./Figs/}}
+
+
+
+\title{Neural Model-Based Reinforcement Learning for Recommendation}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+
+\author{
+XC, SL, other helpers, LS
+\thanks{ Use footnote for providing further information
+about author (webpage, alternative address)---\emph{not} for acknowledging
+funding agencies.  Funding acknowledgements go at the end of the paper.} \\
+Department of Computer Science\\
+Cranberry-Lemon University\\
+Pittsburgh, PA 15213, USA \\
+\texttt{\{hippo,brain,jen\}@cs.cranberry-lemon.edu} \\
+\And
+Ji Q. Ren \& Yevgeny LeNet \\
+Department of Computational Neuroscience \\
+University of the Witwatersrand \\
+Joburg, South Africa \\
+\texttt{\{robot,net\}@wits.ac.za} \\
+\AND
+Coauthor \\
+Affiliation \\
+Address \\
+\texttt{email}
+}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to \LaTeX{} to determine where to break
+% the lines. Using \AND forces a linebreak at that point. So, if \LaTeX{}
+% puts 3 of 4 authors names on the first line, and the last on the second
+% line, try using \AND instead of \And before the third author name.
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+\begin{document}
+
+
+\maketitle
+
+\begin{abstract}
+ There are great interests as well as many challenges in applying reinforcement learning (RL) to recommendation systems. In this setting, an online user is the environment; neither the reward function nor the environment dynamics are clearly defined, making the application of RL challenging. 
+ In this paper, we propose a novel model-based reinforcement learning framework for recommendation systems, where we develop a generative adversarial network to imitate user behavior dynamics and learn her reward function. Using this user model as the simulation environment, we develop a novel DQN algorithm to obtain a combinatorial recommendation policy which can handle a large number of candidate items efficiently. In our experiments with real data, we show this generative adversarial user model can better explain user behavior than alternatives, and the RL policy based on this model can lead to a better long-term reward for the user \xinshi{and higher click rate for the system.}
+\end{abstract}
+
+\vspace{-3mm}
+\section{Introduction}
+\vspace{-3mm}
+        \setlength{\abovedisplayskip}{4pt}
+        \setlength{\abovedisplayshortskip}{1pt}
+        \setlength{\belowdisplayskip}{4pt}
+        \setlength{\belowdisplayshortskip}{1pt}
+        \setlength{\jot}{3pt}
+        \setlength{\textfloatsep}{6pt}	
+
+Recommendation systems have become a crucial part of almost all online service platforms. A typical interaction between the
+system and its users is --- users are recommended a page of items
+and they provide feedback, and then the system recommends a new
+page of items. A common way of building recommendation systems is to estimate a model which minimizes the discrepancy between the model prediction and the \emph{immediate} user response according to some loss function. In other words, these models do not explicitly take into account the long-term user interest. However, user's interest can evolve over time based on what she observes, and the recommender's action may significantly influence such evolution. In some sense, the recommender is guiding users' interest by displaying particular items and hiding the rest. Thus, a recommendation strategy which takes users' long-term interest into account is more favorable.
+
+Reinforcement learning (RL) is a learning paradigm where a policy will be obtained to guide the actions in an environment so as to maximize the expected long-term reward. Although RL framework has been successfully applied to many game settings, such as Atari~\citep{MniKavSilRusetal15} and GO~\citep{SilHuaMadGueetal16}, it met a few challenges in the recommendation system setting because the environment will correspond to the logged online user.
+
+First, a user's interest (reward function) driving her behavior is typically unknown, yet it is critically important for the use of RL algorithms. In existing RL algorithms for recommendation systems, the reward functions are manually designed (e.g. $\pm 1$ for click/no-click) which may not reflect a user's preference over different items~\citep{zhao2018deep,zheng2018drn}. 
+% \xc{For instance, manually designed $\pm 1$ reward for click/non-click may not differentiate user's preference over different items. A reward function which takes user states and item features as input and consistent with user's interest may be more favorable.}
+
+Second, model-free RL typically requires lots of interactions with the environment in order to learn a good policy. This is impractical in the recommendation system setting. An online user will quickly abandon the service if the recommendation looks random and do not meet her interests. Thus, to avoid the large sample complexity of the model-free approach, a model-based RL approach is more preferable.
+In a related but a different setting where one wants to train a robot policy, recent works showed that model-based RL is much more sample efficient~\citep{NagabandiKahn17, DeisenrothFox15, IgnasiPieter18}. The advantage of model-based approaches is that potentially large amount of off-policy data can be pooled and used to learn a good environment dynamics model, whereas model-free approaches can only use expensive on-policy data for learning. However, previous model-based approaches are typically designed based on physics or Gaussian processes, and not tailored for complex sequences of user behaviors.
+
+To address the above challenges, we propose a novel model-based RL framework for recommendation systems, where a user behavior model and the associated reward function are learned in unified minimax framework, and then RL policies are learned using this model. Our main  technical innovations are:
+\begin{enumerate}[nosep,nolistsep]
+    \item We develop a generative adversarial learning ({\small GAN}) formulation to model user behavior dynamics and recover her reward function. These two components are estimated simultaneously via a joint mini-max optimization algorithm. The benefits of our formulation are: (i) a more predictive user model can be obtained, and the reward function are learned in a consistent way with the user model; (ii) the learned reward allows later reinforcement learning to be carried out in a more principled way, rather than relying on manually designed reward; (ii) the learned user model allows us to perform model-based RL and online adaptation for new users to achieve better results.  
+    % \item We design a novel position weighting scheme to embed the user's historical sequence of clicks into a vector. We show by experiments that its performance is comparable with {\small LSTM}, but its architecture is much simpler.
+    \item Using this model as the simulation environment, we also develop a cascading DQN algorithm to obtain a combinatorial recommendation policy. The cascading design of action-value function allows us to find the best subset of items to display from a large pool of candidates with time complexity only linear in the number of candidates. 
+\end{enumerate}
+In our experiments with real data, we showed that this generative adversarial model is a better fit to user behavior in terms of held-out likelihood and click prediction. Based on the learned user model and reward, we show that the estimated recommendation policy leads to better cumulative long-term reward for the user. Furthermore, in the case of model mismatch, our model-based policy can also quickly adapt to the new dynamics with a much fewer number of user interactions compared to model-free approaches.    
+
+% \shuang{ from Lihong Li's KDD paper: A couple of sentences might be used to highlight the proposed model-based reinforcement learning recommendation system. First, our goal is not to make recommendations not based on an individual's preferences, but instead based on the anticipated long-term interest level of a broad group of users from a target community. Second, we try to predict rather than detect popularity. Unlike individual interests, community interest level is not often immediately clear; there is a time lag before the level of interest starts to take off. Here, the goal is for the recommendation system to identify and track new items... in real time -- attempting to identify hot updates before they before they become hot to keep the user at the leading edge. For training purposes, we can use community response measured at a time much later than the original post or publication. This problem is well-suited to the reinforcement paradigm, since the reward (the level of community uptake or positive response) is not immediately known, so the system needs to learn a mechanism for estimating future reactions. }\Le{This second part is probably more suitable for the introduction or framework part to justify why one wants to use RL as the framework.} 
+
+% \Le{
+% Rough flow below. Will work on it when I am up again: 
+
+% There is a great interests in applying reinforcement learning algorithm to recommendation systems. 
+
+% Supposedly reinforcement learning algorithms take into account longer term reward of the user. 
+
+% However, the user utility function is unknown and the transition dynamic is unknown. 
+
+% In a related but a different setting where one wants to train a robot policy, typically the reward is known but the transition is unknown. This is also a very challenging task. Recent results showed that model-based reinforcement learning lead to much better results. 
+
+% Can we also use model based reinforcement learning to improve the recommendation based on reinforcement learning? 
+
+% In this paper we explore a model based reinforcement learning framework for recommendation. We observed that user the following behavior: exploration and exploitation. Thus we model the user as a {\small GAN}, and learn the reward function for the user using a mini-max formulation. 
+
+% Then we optimize a policy according to this learned user model using DQN with experience replay. 
+
+% We find that this model has a better fit to user behavior in terms of likelihood and explaining user behavior than alternatives (logistic regression and ccf). Furthermore, the learned policy is also able to make recommendation which leads to better long term reward, compared to directly learn reinforcement learning policy from data. 
+
+% }
+
+% Improving the policy of displaying items to users is a core task for online marketing in web services, internet media platforms, and e-commerce platforms. 
+% % It is crucial for precision marketing that a recommender system can understand users' interests, and personalized recommendation is provided to the user. It thus becomes indispensable to learn each user's preference and his choice behavior.
+% Previously, plenty of predictive user models have been designed to exploit a wealth of data collected from previous user interaction with the platform. However, it is commonly assumed in these models that users choose what they like~\citep{RicDomRag07, GraepelCandela10}, and user's past experience and active exploration-exploitation are not explicitly taken into account. 
+
+% We include the online user as an active agent in the system who makes choices by optimizing her own objective function. We consider the learning of such unknown object by observing her actions.
+
+% We align the rewards of recommender with the objects of users so as to achieve a strategy which aims at satisfying the users and engaging the users in the system for a long run.
+
+\vspace{-3mm}
+\section{Related Work}
+\vspace{-3mm}
+
+Commonly used recommendation algorithms typically use a simple user model. For instance, Wide\&Deep networks~\citep{ChengKocHarmsen16} and other methods such as xgboost~\citep{chen2016xgboost} and DFM~\citep{guo2017deepfm} based on logistic regression essentially assume a user chooses each item independently; Collaborative competitive filtering~\citep{YanLonSmoEtal11b} takes into account the context where a user makes her choice but assumes that user's behaviors in each page view are independent. 
+Session-based RNN~\citep{HidKarBalTik16} and session-based KNN~\citep{jannach2017recurrent} improve upon previous approaches by modeling users' history, but this model does not recover a users' reward function and can not be used subsequently for reinforcement learning. Bandit based approaches, such as LinUCB~\citep{LiChuLanSch10}, can deal with adversarial user behaviors, but the reward is updated in a Bayesian framework and can not be directly used by a reinforcement learning framework. 
+% \xc{feel a bit strange for the linUCB description here..}. 
+% In contrast, we will design a more realistic user model and learn 
+% the corresponding reward function suitable for subsequent reinforcement learning task. 
+
+% Recently, \cite{XiangyuLiangZhuoye18,zhao2018deep,zheng2018drn} used RL for recommender systems. However, their reward functions in these work are typically manually designed and are not learned jointly with the user dynamics model. In contrast, our framework will learn the optimal reward functions which can explain the corresponding user bebavior model. Such matching reward function and user model facilitate subsequent recommendation policy optimization based on reinforcement learning.  
+
+% Focus on what's the difference during description. No model, hand-designed reward. 
+
+\cite{XiangyuLiangZhuoye18,zhao2018deep,zheng2018drn} used model-free RL for recommender systems, which may require many user interactions and the reward function is manually designed. Model-based reinforcement learning has been commonly used in robotics applications and resulted in reduced sample complexity to obtain a good policy~\citep{DeisenrothFox15,NagabandiKahn17,IgnasiPieter18}.  However, these approaches can not be used in the recommendation setting, as a user behavior model typically consists of sequences of discrete choices under a complex session context.   
+
+% In contrast, our model treat the user as an intelligent agent which can optimize its own rewards, and take actions to balance her own exploration and exploitation.  
+
+\vspace{-3mm}
+\section{Setting and RL Formulation}
+\vspace{-3mm}
+
+We will focus on a simple yet typical setting where the recommendation system and its user interact as follows: {\bf a user is displayed to a page of $k$ items and she provides feedback by clicking on one or none of these items, and then the system recommends a new page of $k$ items.} Our model can be extended to settings with more complex page views and user interactions, but these settings are left for future studies. 
+
+Since reinforcement learning can take into account long-term reward, it holds the promise to improve users' long-term engagement with an online platform. In the RL framework, a recommendation system wants to find a policy $\pi(\vs, \gI)$ to choose a set $\gI$ of $k$ items based on user state $\vs$, such that the long-term expected reward to the user is maximized, i.e.
+{\small \begin{equation}
+    \pi^\ast = \argmax_{\pi(\vs^t,\gI^t)}~\E\Big[\sum_{t=0}^{\infty} \gamma^t r(\vs^t, a^t)\Big],~\text{where}~\vs^0\sim p^0,~\gA^t \sim \pi(\vs^t,\gI^t),~\vs^{t+1} \sim P(\cdot | \vs^t, \gA^t),~a^t \in \gA^t, 
+    \label{eq:rl}
+\end{equation}}
+where several key aspects of this RL framework are as follows: 
+\begin{enumerate}[nosep, nolistsep, wide]
+    \item[(1)] {\bf Environment}: will correspond to a logged online user who can click on one of the $k$ items displayed by the recommendation system in each page view (or interaction);
+    \item[(2)] {\bf State $\vs^t \in \gS$}: will correspond to an ordered sequence of a user's historical clicks; %some summary statistic of the user's historical sequence of clicks.  
+    \item[(3)] {\bf Action {\small$\gA^t \in {\gI^t \choose k}$}} of the recommender: will correspond to a subset of $k$ items chosen by the recommender from $\gI^t$ to display to the user. {\small${\gI^t \choose k}$} means the set of all subsets of $k$ items of $\gI^t$. $\gI^t \subset{\gI}$ is the subset of available items to recommend at time $t$ among all items $\gI$. 
+    \item[(4)] {\bf State Transition {\small$P(\cdot|\vs^t,\gA^t):\gS \times {\gI \choose k} \mapsto \gP(\gS)$}}: will correspond to a user behavior model which returns the transition probability for $\vs^{t+1}$ given previous state $\vs^t$ and the set of items $\gA^t$ displayed by the system. It is equivalent to the distribution $\phi(\vs^t, \gA^t)$ over a user's actions, which is defined in our user model in section~\ref{sec:user_model}.
+    \item[(5)] {\bf Reward Function} $r${\small$(\vs^t,\gA^t, a^t):\gS  \times {\gI \choose k} \times \gI \mapsto \sR$}: will correspond to a user's utility or satisfaction after making her choice {\small$a^t\in \gA^t$} in state $\vs^t$. Here we assume that the reward to the recommendation system is the same as the user's utility. Thus, a recommendation algorithm which optimizes its long-term reward is designed to satisfy the user in a long run. %equivalent to optimize user's long term interests. 
+    One can also include the company's benefit to the reward, but in this paper we will focus on users'  satisfaction. 
+    \item[(6)] {\bf Policy {\small$\gA^t \sim \pi(\vs^t, \gI^t):\gS\times 2^{\gI} \mapsto \gP({\gI \choose k})$}}: will correspond to a recommendation strategy which takes a user's state $\vs^t$ and returns the probability of displaying a subset {\small$\gA^t$} of {\small$\gI^t$}. 
+\end{enumerate}
+{\bf Remark.} We note that in the above mapping, {\it Environment, State} and {\it State Transition} are associated with the user, the {\it Action} and {\it Policy} are associated with the recommendation system, and the {\it Reward Function} is associated with both the recommendation system and the user.
+Here we use the notation $r${\small$(\vs^t, \gA^t, a^t)$} to emphasize the dependency of the reward on the recommendation action, as the user can only choose from the display set. However, the value of the reward is actually determined by the user's state and the clicked item once the item occurs in the display set {\small$\gA^t$}. In fact, $r${\small$(\vs^t, \gA^t, a^t) $}$=r${\small$(\vs^t, a^t)\cdot \1(a^t\in \gA^t) $}. Thus, in section~\ref{sec:user_model} where we discuss the user model, we simply denote $r${\small$(\vs^t, a^t)$}$=r${\small$(\vs^t, \gA^t, a^t)$} and assume {\small$a^t\in \gA^t$} is true. The overall RL framework for recommendation is illustrated in Figure~\ref{fig:overall_framework}. 
+
+\begin{figure}[h]
+    \vspace{-4mm}
+    \centering
+    \includegraphics[width=0.75\textwidth]{overallfigure.pdf}
+    \vspace{-3mm}
+    \caption{{\small Illustration of the interaction between a user and the recommendation system. Green arrows represent the recommender information flow and orange arrows represent user's information flow.}}
+    \label{fig:overall_framework}
+    \vspace{-3mm}
+\end{figure}{}
+
+Since both the reward function and the state transition model are not provided, we need to learn them from data. Once these quantities are learned, the optimal policy $\pi^\ast$ in~\eqref{eq:rl} can be estimated by repeated querying to the model using algorithms such as Q-learning~\citep{Watkins89}. In the next two sections, we will explain our formulation for estimating the user behavior model as well as the reward function and design an efficient algorithm for learning the RL policy for the recommendation. 
+
+
+\vspace{-3mm}
+\section{Generative Adversarial User Model}
+\vspace{-3mm}
+
+In this section, we propose a model to imitate users' sequential choices and discuss its parameterization and estimation. The formulation of our user model is inspired by imitation learning, which is a powerful tool for learning sequential decision-making policies from expert demonstrations~\citep{Abbeel2004ApprenticeshipLV,Ho2016ModelFreeIL,Ho2016GenerativeAI,Torabi2018BehavioralCF}
+% In our model, user is viewed as the expert, and we aim at learning a model of her decision-making based on sample trajectories. 
+We will formulate a unified mini-max optimization to learn user behavior model and reward function simultaneously based on sample trajectories. 
+
+\vspace{-3mm}
+\subsection{User Behavior As Reward Maximization}\label{sec:user_model}
+\vspace{-3mm}
+We model user behavior based on two realistic assumptions. (i) Users are not passive. Instead, when a user is displayed to a set of $k$ items, she will make a choice to maximize her own reward. The reward $r$ measures how much she will be satisfied with or interested in an item. Alternatively, the user can choose not to click on any items. Then she will receive the reward of not wasting time on boring items. (ii) The reward depends not only on the selected item but also on the user's history. For example, a user may not be interested in {\it Taylor Swift}'s song at the beginning, but once she happens to listen to it, she may like it and then becomes interested in her other songs. Also, a user can get bored after listening to {\it Taylor Swift}'s songs repeatedly. In other words, a user's evaluation of the items varies in accordance with her personal experience.
+
+To formalize the model, we consider both the clicked item and the state of the user as the inputs to the reward function $r(\vs^t, a^t)$, where the clicked item is the user's action $a^t$ and the user's history is captured in her state $\vs^t$ (non-click is treated as a special item/action). Suppose in session $t$, the user is presented with a set of $k$ items $\gA^t = \{a_1, \cdots, a_k \}$ and their associated features $\{\vf^t_1,\cdots, \vf^t_k\}$ by the recommendation system. She will take an action $a^t \in \gA^t$ according to a strategy $\phi^*$ which can maximize her expected reward. More specially, this strategy is a probability distribution over the set of candidate actions $\gA^t$, which is the result of the following optimization problem
+\begin{equation}\label{eq:max}
+    \textbf{\small User Model:}~~~~\phi^*(\vs^t,\gA^t) = \arg\max_{\phi \in \Delta^{k-1}} \E_{\phi} \left[r(\vs^t, a^t) \right] -R(\phi)/\eta,
+\vspace{-1.2mm}
+\end{equation}
+where {\small$\Delta^{k-1}$} is the probability simplex, and $R(\phi)$ is a convex regularization function to encourage exploration, and $\eta$ controls the strength of the regularization. 
+
+{\bf Model Interpretion.} A widely used regularization is the negative Shannon entropy, with which we can obtain an interpretation of our user model from the perspective of exploration-exploitation trade-off (See Appendix~\ref{app:proof} for a proof). 
+\begin{restatable}{lemma}{primelemma}\label{lm:lemma1}
+Let the regularization term in~\eqref{eq:max} be $R(\phi) = \sum_{i=1}^k \phi_i \log \phi_i$ and $\phi \in \Delta^{k-1}$ is allowed to be arbitrary mappings. Then the optimal solution $\phi^*$ for the problem in~\eqref{eq:max} has a closed form
+\begin{equation}\label{eq:exp}
+	\phi^\ast(\vs^t,\gA^t)_i =\exp(\eta r(\vs^t, a_i))/{\textstyle \sum_{a_j \in \gA^t}}\exp(\eta r(\vs^t, a_j)).
+\end{equation}
+Furthermore, in each session $t$, the user's decision according to her optimal policy $\phi^*$ is equivalent to the following discrete choice model where $\varepsilon^t$ follows a Gumbel distribution.
+\begin{equation}\label{eq:gumbel}
+ 	a^t = \arg\max_{a \in \gA^t }~\eta\, r(\vs^t, a) + \varepsilon^t.
+ \end{equation}
+\end{restatable}
+\vspace{-2.5mm}
+Essentially, this lemma makes it clear that the user greedily picks an item according to the reward function (exploitation), and yet the Gumbel noise $\varepsilon^t$ allows the user to deviate and explore other less rewarding items. Similar models have also appeared in the econometric choice model~\citep{Manski75,McFa73}, but previous econometric models did not take into account diverse features and user state evolution. The regularization parameter $\eta$ is revealed to be an exploration-exploitation trade-off parameter. It can be easily seen that with a smaller $\eta$, the user is more exploratory. Thus, $\eta$ reveals a part of users' character. In practice, we simply set the value $\eta=1$ in our experiments, since it is implicitly learned in the reward $r$, which is a function of various features of a user.
+
+{\bf Remark.} (i) Other regularization $R(\phi)$ can also be used in our framework, which may induce different user behaviors. In these cases, the relations between $\phi^*$ and $r$ are also different, and may not appear in the closed form. (ii) The case where the user does not click any items can be regarded as a special item which is always in the display set $\gA^t$. It can be defined as an item with zero feature vector, or, alternatively, its reward value can be defined as a constant to be learned. 
+% With such a simple modification, equation~\eqref{eq:max} can generate the non-clicking case, so for simplicity we do not use a specific notification for it.
+
+\vspace{-3mm}
+\subsection{Model Parameterization}
+\label{sec:model_param}
+\vspace{-2mm}
+
+In this section, we will define the state $\vs^t$ as an embedding of the historical sequence of items clicked by the user before session $t$, and then we will define the reward function $r(\vs^t, a^t)$ based on the state and the embedding of the current action $a^t$.
+
+First, we will define the state of the user as $\vs^t := h({\small \mF_\ast^{1:t-1} := [ \vf_\ast^{1},\cdots,\vf_\ast^{t-1} ]})$, where each $\vf_\ast^\tau \in \sR^d$ is the feature vector of the clicked item at session $\tau$ and $h(\cdot)$ is an embedding function. One can also define a truncated $M$-step sequence as {\small $\mF^{t-m:t-1}_\ast:=[\vf_\ast^{t-m},\cdots,\vf_\ast^{t-1}]$}. 
+% In practice, $\vf$ is usually a user-item cross feature. 
+For the state embedding function $h(\cdot)$, we propose a simple and effective position weighting scheme. Let {\small$\mW \in \sR^{m\times n}$} be a matrix where the number of rows $m$ corresponds to a fixed number of historical steps, and each of the $n$ columns corresponds to one set of importance weights on positions. Then the embedding function $h$ can be designed as 
+\begin{equation}
+    \label{eq:state_embedding}
+    \vs^t = h(\mF^{t-m:t-1}_\ast) := vec \left[\, \sigma \left(\, \mF_*^{t-m:t-1} \mW + \mB \,\right)\, \right]~~\in~~\sR^{dn\times 1}, 
+\end{equation}
+where $\mB\in \sR^{d\times n}$ is a bias matrix, and $\sigma(\cdot)$ is a nonlinear activation function such as ReLU and ELU, and $vec[\cdot]$ turns the input matrix into a long vector by concatenating the matrix columns.
+Alternatively, one can also use an {\small LSTM} to capture the history. However, the advantage of the position weighting parameterization is that the history embedding is obtained by a shallow network which is more efficient for forward-computation and gradient backpropagation than RNN. 
+\begin{figure}[htbp]
+    \vspace{-2.5mm}
+  \begin{minipage}[c]{0.50\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/PABOW.pdf}
+  \end{minipage}
+  \begin{minipage}[c]{0.40\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/LSTM.pdf}
+  \end{minipage}\hfill
+    \vspace{-2.5mm}
+  \caption{\footnotesize Architecture of our models parameterized by either position weight ({\small PW}) or {\small LSTM}. 
+    }
+    \label{fg:usermodel}
+    \vspace{-4mm}
+\end{figure}
+
+Next, we define the reward function and the user behavior model. A user's choice $a^t\in \gA^t$ corresponds to an item with feature $\vf_{a^t}^t$. Thus we will use $\vf_{a^t}^t$ as the surrogate for $a^t$ and parameterize the reward function and user behavior model as 
+\begin{equation}
+    r(\vs^t, a^t) := \vv^\top \sigma \Big(\, \mV \left[
+    \begin{matrix}
+        \vs^t \cr
+        \vf_{a^t}^t
+    \end{matrix}
+    \right] + \vb \, \Big)~~\text{and}~~
+    \phi(\vs,\gA^t) \propto \exp\Big( 
+    {\vv'}^{\top} \sigma \Big(\, \mV' \left[
+    \begin{matrix}
+        \vs^t \cr
+        \vf_{a^t}^t
+    \end{matrix}
+    \right] + \vb' \, \Big)    
+    \Big), 
+\end{equation}
+where {\small$\mV,\mV' \in \sR^{\ell \times (dn+d)}$} are weight matrices, {\small$\vb,\vb' \in \sR^{ 1 \times (dn+d)}$} are bias vectors \xc{,} and {\small$\vv,\vv' \in \sR^{\ell}$} are the final regression parameters. See Figure \ref{fg:usermodel} for an illustration of the overall parameterization. For simplicity of notation, we will denote the set of all parameters in the reward function as $\theta$ and the set of all parameters in the user model as $\alpha$, and hence the notation $r_\theta$ and $\phi_\alpha$ respectively.    
+
+\vspace{-3mm}
+\subsection{Generative Adversarial Training}
+\label{sec:gan_training}
+\vspace{-2mm}
+
+In practice, both the user reward function $r(\vs^t,a^t)$ and the behavior model $\phi(\vs^t, \gA^t)$ are unknown and need to be estimated from the data. The behavior model $\phi$ tries to mimic the action sequences provided by a real user who acts to maximize her reward function $r$. In analogy to generative adversarial networks, (i) $\phi$ acts as a generator which generates the user's next action based on her history, and (ii) $r$ acts as a discriminator which tries to differentiate the user's actual actions from those generated by the behavior model $\phi$. Thus, inspired by the {\small GAN} framework, we estimate $\phi$ and $r$ simultaneously via a mini-max formulation. 
+
+More precisely, given a trajectory of $T$ observed actions {\small $\{a^1_{true},a^2_{true},\ldots,a^T_{true}\}$} of a user and the corresponding clicked item features $\{\vf_\ast^1, \vf_\ast^2, \ldots, \vf_\ast^T\}$, we learn the user behavior model and reward function jointly by solving the following mini-max optimization 
+% \xc{equation slightly changed. i think this is more general.}
+ \begin{equation}\label{eq:std-minmax}
+	\min_{\theta } \max_{\alpha } \big( \E_{\phi_\alpha} \big[{\textstyle\sum_{t=1}^T}r_{\theta}(\vs^t_{true}, a^t)\big] -R(\phi_\alpha)/\eta\big)-{\textstyle\sum_{t=1}^T} r_{\theta}(\vs^t_{true}, a^t_{true}),
+\end{equation}
+where 
+% the collection of parameters in the model for $r_\theta$ are denoted as \theta$ as in section~\ref{sec:model_param}, \xc{and} $\Phi$ {\small $\subset \{\phi:\gS \times {\gI \choose k} \mapsto \Delta^{k-1}\}$} is a family of admissible mappings \xc{.} \xc{And} \st{and} 
+we use $\vs^t_{true}$ to emphasize that this is observed in the data. From the above optimization, one can see that the learned reward function $r_\theta$ will extract some statistics from both real user actions and model user actions, and try to magnify their difference (or make their negative gap larger). In contrast, the learned user behavior model will try to make the difference smaller, and hence more similar to the real user behavior. Alternatively, the mini-max optimization can also be interpreted as a game between an adversary and a learner where the adversary tries to minimize the reward of the learner by adjusting $r_\theta$, while the learner tries to maximize its reward by adjusting $\phi_\alpha$ to counteract the adversarial moves. This gives the user behavior training process a large-margin training flavor, where we want to learn the best model even for the worst scenario. 
+
+% \Le{rewrite this sentence to make the large margin idea more clear.} 
+% In~\eqref{eq:std-minmax}, the user model can approach the actual user behavior by solving the optimal strategy $\phi$ with respect to the learned reward function $r_{\theta}$, and the reward $r_{\theta}$ can be a better fit to the actual user policy by assigning it a higher reward so as to distinguish it from the generator. 
+
+For general regularization function $R(\phi_\alpha)$, the mini-max optimization problem in~\eqref{eq:std-minmax} does not have a closed form, and typically needs to be solved by alternatively updating $\phi_{\alpha}$ and $r_{\theta}$, e.g. 
+% \Le{Maybe we list the GAN alternating update here for general regularization. Then we say fortunately we can initalizate it better.}\xc{Do you mean: something like pseudocode? list two gradient steps?} 
+\begin{equation}\footnotesize{\begin{cases}\alpha \gets \alpha + \gamma_1\nabla_{\alpha}\E_{\phi_{\alpha}}\Big[\sum_{t=1}^T r_{\theta}(\vs^t_{true}, a^t) \Big]-\gamma_1\nabla_{\alpha}R(\phi_{\alpha})/\eta ;\\
+\theta \gets \theta -\gamma_2 \E_{\phi_{\alpha}}\Big[\sum_{t=1}^T \nabla_{\theta} r_{\theta}(\vs^t_{true},a^t)\Big] +\gamma_2 \sum_{t=1}^T \nabla_{\theta} r_{\theta}(\vs^t_{true},a^t_{true}).
+\end{cases}}
+\end{equation}
+The process may be unstable due to the non-convexity nature of the problem. To stabilize the training process, we will leverage a special regularization for initializing the training process. More specifically, for entropy regularization, we can obtain a closed form solution to the inner-maximization for user behavior model, which makes the learning of reward function easy (See lemma~\ref{lm2:mle} below and Appendix~\ref{app:proof} for a proof). Once the reward function is learned for entropy regularization, it can be used to initialize the learning in the case of other regularization functions which may induce different user behavior models and final rewards. 
+% \Le{can merge a bit with the description after the lemma.} \Le{Can we do an experiment on this? eg. using L2 regularization, or other entropy.} \xc{trying collision entropy and L2 regularization.}
+% To learn the user policy, we tend to modify~\eqref{eq:std-minmax} to~\eqref{eq:modify-minmax}.
+
+% \xc{explain why~\eqref{eq:modify-minmax}: (1) In reality, user is unable to optimize her cumulative reward without observing those items displayed to her in the future. (2) As a recommender, we do not benefit much from generating a whole trajectory of user's choices given user's initial states, because we can always observe her current states before we make recommendation.}
+
+% \begin{equation}\label{eq:modify-minmax}
+% \min_{\theta \in \Theta} \Big(\max_{\pi\in \Pi} \E_{\pi} \sum_{t=1}^T r_{\theta}(\vs^t_{true}, a^t) -\frac{1}{\eta}\E_{\pi}R(\pi)\Big)-\sum_{t=1}^T r_{\theta}(\vs^t_{true}, a^t_{true})
+% \end{equation}
+
+\begin{restatable}{lemma}{secondlemma}\label{lm2:mle}
+Consider the case where regularization in~\eqref{eq:std-minmax} is defined as $R(\phi) = \sum_{i=1}^k \phi_i \log \phi_i$ and $\Phi$ includes all mappings from $\gS \times {\gI \choose k}$ to $\Delta^{k-1}$. Then the optimization problem in~\eqref{eq:std-minmax} is equivalent to the following maximum likelihood estimation
+{\small \begin{equation}\label{eq:mle}
+	\max_{\theta \in \Theta}~\prod_{t=1}^T \dfrac{\exp(\eta r_{\theta}(\vs_{true}^t, a^t_{true}))}{\sum_{a^t \in \gA^t}\exp(\eta r_{\theta}(\vs_{true}^t, a^t))}.
+\end{equation}}
+ \end{restatable}
+ 
+% %  \xc{I fail to come up with a good argument here....don't know how to emphasize the {\small GAN}...instead of mle..}
+% This lemma enables us to learn a $\hat{\theta}^*$ in a more efficient and stabler way by applying standard algorithms such as SGD or ADAM to solve the single maximization problem in~\eqref{eq:mle}. Then we can use this $\hat{\theta}^*$ as the initialization for the optimization problem~\eqref{eq:std-minmax} with other $R(\phi)$.   
+% Furthermore, if we use other regularization function $R(\phi)$, the original optimization problem in~\eqref{eq:std-minmax} can not be expressed as~\eqref{eq:mle}, and we need to optimize both $\theta$ and $\phi^t$. In this case, we can use $\hat{\theta}^*$ estimated from maximum likelihood to initialize the $\theta$ in this new optimization problem. 
+
+% an approximately optimal solution $\hat{\theta}$ to~\eqref{eq:mle} by SGD. With many experimental trails, we find the learned $\hat{\theta}^*$ a good initialization of $\theta$ for the mini-max optimization problem and help to stablize the mini-max training process.
+\vspace{-3mm}
+\section{Cascading Q-networks for RL Recommendation Policy}
+\vspace{-3mm}
+
+\label{sec:rl_policy}
+
+Using the estimated user behavior model $\phi$ and the corresponding reward function $r$ as the simulation environment, we can then use reinforcement learning to obtain a recommendation policy. Note that the recommendation policy needs to deal with a {\it combinatorial action space} $\gI \choose k$, where each action is a subset of $k$ items chosen from a larger set $\gI$ of $K$ candidates.
+Two challenges associated with this problem include the potentially high computational complexity of the combinatorial action space and the development of a framework for estimating the long-term reward (the Q function) from a combination of items. Our contribution is designing a novel cascade of Q-networks to handle the combinatorial action space. We can also design an algorithm to estimate this cascade of Q-networks from interaction with the environment. 
+% In this section, we will learn a policy for the recommendation system based on the user behavior model. The goal of the recommendation policy is to maximize the expected long term reward of the user. To realize this goal in the reinforcement learning framework, we assume that the reward to the recommendation system is the same as that of the user, and the environment dynamics will correspond to the user behavior model learned in the previous section; The user's behavior will be influenced by the actions of the recommendation system and potentially being led to achieve better long term rewards. That is we want to learn an optimal recommendation policy $\pi(\vs)$ which takes the user's state $\vs$ and chooses $k$ items to display. 
+% Since each time the recommendation system needs to choose a set of $k$ items from a potentially large pool of items, we will design a factorized action-value function $Q$ to address this challenge. Furthermore, we will will adapt the Q-learning method to estimate this factorized $Q$ function. 
+\vspace{-3mm}
+\subsection{cascading Q-Networks}
+\vspace{-2mm}
+
+We assume that each time when a user visits the online platform, 
+%In each session (or interaction with the user),\Le{Session may not be a good word, since Session could mean mutiple displays} 
+the recommendation system needs to choose a subset $\gA$ of $k$ items from $\gI$. We will use the Q-learning framework where an optimal action-value function $Q^*(\vs,\gA)$ will be learned and satisfies $Q^*(\vs^t, \gA^t) =\E\big[r(\vs^t, \gA^t, a^t) + \gamma  {\textstyle\max_{\gA'\subset \gI}}~Q^*(\vs^{t+1}, \gA')\big]$, $a^t \in \gA^t$.  
+% \begin{equation}\label{eqn:bellman}
+% 	Q^*(\vs^t, \gA^t) =\E_{a^t\sim \sigma(\vs^t)}\left[r(\vs^t, a^t)\right] + \gamma  \E_{a^t\sim\sigma(\vs^t),\vs^{t+1}\sim P(\vs^{t+1}|\vs^t,a^t)}\left[\gAx_{\mA'}Q^*(\vs^{t+1}, ')\right].
+% \end{equation}
+% \begin{equation}\label{eqn:bellman}
+% 	%Q^*(\vs^t, \gA^t) = \underbrace{\E_{\sigma}\left[r(\vs^t, a^t)\right]}_{:=Rwd(\vs^t, \gA^t)} + \gamma  \E_{\sigma}\left[\max_{\gA'\subset \gI}Q^*(\vs^{t+1}, \gA')\right],~~a^t \in \gA^t.
+% 		Q^*(\vs^t, \gA^t) =\E\big[r(\vs^t, \gA^t, a^t) + \gamma  {\textstyle\max_{\gA'\subset \gI}}~Q^*(\vs^{t+1}, \gA')\big],~~a^t \in \gA^t.
+% \end{equation}
+% The action $\gA^t$ corresponds to $k$ items chosen from $K$ items.  \Le{It is equivalent to the notation $\mF^t=\{\vf^t_1,\cdots, \vf^t_k\}$. Add this earlier}. 
+% Note that the value $r(\vs^t, a^t)$ depends on the feature content of the recommendation action $\gA^t$, so to simplify notation, we write $Rwd(\vs^t, \gA^t):=\E_{\sigma}\left[r(\vs^t, a^t)\right]$.
+Once the action-value function is learned, an optimal policy for recommendation can be obtained as
+\begin{equation}\label{eq:policy}
+	\pi^\ast(\vs^t, \gI^t)=\arg{\textstyle\max_{\gA^t\subset \gI^t}}~Q^*(\vs^t, \gA^t), 
+\end{equation}
+where $\gI^t \subset \gI$ is the set of items available at time $t$.
+The challenge is that the action space contains {\small ${K \choose k}$} many choices, which can be very large even for moderate $K$ (e.g. 1,000) and $k$ (e.g. 5). Furthermore, an item put in different combinations can have different probabilities of being clicked, which is indicated by the user model and is in line with reality. For instance, interesting items may compete with each other for a user's attention. Thus, the policy in~\eqref{eq:policy} will be very expensive to compute. To address this challenge, we will design not just one but a set of $k$ related Q-functions which will be used in a cascading fashion for finding the maximum in~\eqref{eq:policy}. 
+
+Denote the recommender actions as {\small$\gA=\{a_1, a_2,\cdots, a_k\}\subset \gI $} and the optimal action as {\small$\gA^* =\{a_1^*, a_2^*, \cdots, a_k^*\} =\arg\max_{\gA} Q^*(
+\vs, \gA)$}. Our cascading Q-networks are inspired by the key fact that:
+{\small \begin{equation}\label{eq:max_decomp}
+\max_{a_1,a_2,\cdots,a_k}Q^*(\vs,a_1,a_2,\cdots,a_k) = \max_{a_1}\big( \max_{a_2,\ldots,a_k}Q^*(\vs,a_1,a_2,\cdots,a_k) \big),
+\end{equation}}
+which also implies that there is a cascade of mutually consistent {\small $Q^{1*},Q^{2*},\ldots,Q^{k*}$} such that: 
+{\small \begin{align*}
+    a_1^* =\arg {\textstyle\max_{a_1}}Q^{1*}(\vs, a_1) & \quad\text{with}\quad\displaystyle Q^{1*}(\vs, a_1):={\textstyle\max_{a_2,\cdots,a_k}}Q^*(\vs,a_1,\cdots, a_k),  \\
+      a_2^* =\arg {\textstyle\max_{a_2}}Q^{2*}(\vs, a_1^*, a_2) & \quad\text{with}\quad \displaystyle Q^{2*}(\vs, a_1, a_2):={\textstyle\max_{a_3,\cdots,a_k}}Q^*(\vs,a_1,\cdots, a_k), \\
+      \cdots & \cdots \nonumber\\
+      a_k^* = \arg {\textstyle\max_{a_k}}Q^{k*}(\vs, a_1^*,\cdots,a_{k-1}^*, a_k) & \quad\text{with}\quad Q^{k*}(\vs, a_1, \cdots,a_k):=Q^*(\vs,a_1,\cdots, a_k).  
+\end{align*}}
+Thus, we can obtain an optimal action in $O${\small$(k|\gI|)$} computations by applying these functions in a cascading manner. See algorithm~\ref{alg:argmax_q} and Figure~\ref{fig:qnetwork} for a summary. However, this cascade of $Q^{j*}$ functions are usually not available and need to be estimated from the data. 
+\vspace{-3mm}
+\subsection{parameterization and Estimation of cascading Q-Networks} 
+\vspace{-3mm}
+
+Each $Q^{j*}$ function is estimated by a neural network parameterized as
+\begin{equation}
+    \widehat{Q^{j}}(\vs, a_{1:j-1}^*, a_j; \Theta_j) = \vq_j^\top \sigma \Big( \mL_j\,
+        \big[
+            \vs^\top,\,  
+            \vf_{a_1^*}^\top,\, 
+            \ldots,\,
+            \vf_{a_{j-1}^*}^\top,\,
+            \vf_{a_j}^\top
+        \big]^\top
+        +\, \vc_j
+    \Big),~~\forall j=1,\ldots,k,
+\end{equation}
+where {\small$\mL_j \in \sR^{\ell\times(dn+dj)}$}, {\small$\vc_j \in \sR^{\ell}$} and {\small$\vq_j \in \sR^{\ell}$} are the set {\small$\Theta_j$} of parameters, and we use the same embedding for the state $\vs$ as in~\eqref{eq:state_embedding}. Now the problem left is how we can estimate these functions {\small$\widehat{Q^{j}}$}. Note that the set of {\small$Q^{j*}$} functions need to satisfy a large set of constraints. At the optimal point, the value of $Q^{j*}$ is the same as $Q^*$ for all $j$, i.e., 
+\begin{equation}
+    \label{eq:constraints}
+        Q^{j*}(\vs, a_1^*, \cdots, a_j^*) = Q^*(\vs,a_1^*,\cdots,a_k^*),\quad \forall j=1,\ldots, k.
+\end{equation}
+Since it may not be easy to strictly enforce these constraints, we take them into account in a soft and approximate way in our model fitting process as stated below. 
+
+Different from standard Q-learning, our cascading Q-learning process is learning a set of $k$ parameterized functions {\small$\widehat{Q^j}(\vs^t, a_{1:j-1}^*, a_j; \Theta_j)$} as approximations of {\small$Q^{j*}$}. To enforce the constraints in~\eqref{eq:constraints} in a soft and approximate way, we can define the loss as
+\begin{equation}
+\label{eq:loss}
+\big(y- \widehat{Q^j} \big)^2,~\text{where}~y= r(\vs^t, \gA^t, a^t) + \gamma \widehat{Q^{k}}(\vs^{t+1}, a_1^*,\cdots,a_k^*; \Theta_k),~ \forall j=1,\ldots,k.
+\end{equation}
+That is all {\small$\widehat{Q^j}$} networks are fitting against the same target $y$. Then the parameters {\small$\Theta_k$} can be updated by performing gradient steps over the above loss. It is noticed in our experiments that the set of learned {\small$\widehat{Q^j}$} networks satisfies the constraints nicely with a small error.
+
+The overall cascading Q-learning algorithm is summarized in Algorithm~\ref{alg:dqn} in Appendix~\ref{app:algo}, where we employ the cascading Q functions to search the optimal action efficiently. Besides, both the experience replay~\citep{MniKavSilGraetal13} and $\varepsilon$-exploration techniques are applied. 
+
+\begin{tabular}{cc}
+\begin{minipage}{.53\textwidth}
+\vspace{-3mm}
+\begin{algorithm}[H]
+\caption{Search using {\small$\widehat{Q^{j}}$} Cascades}
+\label{alg:argmax_q}
+\begin{algorithmic}[1]
+\Function{argmax\_Q}{\small$\vs, \gA, \Theta_1,\cdots,\Theta_k$}
+    \State Let {\small$\gA^*$} be empty.
+    \State {\small$\gI = \gA \setminus{\vs}$} \Comment{remove clicked items.}
+    \For{\small$j=1$ to $k$}
+    	\State {\small$\displaystyle {a}_j^*=\arg{\textstyle\max_{a_j\in \gI \setminus {\gA^*}} }\widehat{Q^{j}}(\vs, {a}_{1:j-1}^*, a_j; \Theta_j)$}
+    	\State Update {\small${\gA}^* = {\gA}^* \cup \{{a}_j^* \}$}
+    \EndFor
+    \State \Return {\small${\gA}^* = ({a}_1^*,\cdots,{a}_k^*)$}
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+\end{minipage} &
+\begin{minipage}{.46\textwidth}
+\centering
+\vspace{-3mm}
+\includegraphics[width=0.8\textwidth]{Figs/Qnetwork.pdf}
+\vspace{-3mm}
+\captionof{figure}{\small Cascading Q-networks}
+\vspace{-3mm}
+\label{fig:qnetwork}
+\end{minipage}
+\end{tabular}
+
+\vspace{-3mm}
+\section{Experiments}
+\vspace{-3mm}
+
+We conduct three sets of experiments to evaluate our generative adversarial user model (called {\small GAN} user model) and the resulting RL recommendation policy. Our experiments are designed to investigate the following questions: {\bf (1)} Can {\small GAN} user model lead to better user behavior prediction? {\bf (2)} Can {\small GAN} user model lead to higher user reward and click rate? and {\bf (3)} Can {\small GAN} user model help reduce the sample complexity of reinforcement learning? 
+
+\vspace{-3mm}
+\subsection{Dataset and feature description}
+\vspace{-3mm}
+
+We experimented with 6 real-world {datasets}: {\bf (1) Ant Financial News dataset} contains clicks records from 50,000 users for one month, involving dozens of thousands of news. On average each display set contains 5 news articles. It also contains user-item cross features which are widely used in this online platform; {\bf (2) MovieLens} contains a large number of movie ratings, from which we randomly sample 1,000 active users. Each display set is simulated by collecting 39 movies released near the time the movie is rated. Movie features are collected from IMDB. Categorical and descriptive features are encoded as sparse and dense vectors respectively; {\bf (3) Last.fm} contains listening records from 359,347 users. Each display set is simulated by collecting 9 songs with the nearest time-stamp. {\bf (4) Yelp} contains users' reviews to various businesses. Each display set is simulated by collecting 9 businesses with the nearest location. {\bf (5) RecSys15} contains click-streams that sometimes end with purchase events. {\bf (6) Taobao} contains the clicking and buying records of users in 22 days. We consider the buying records as positive events.
+% The datasets are either preprocessed or collected to follow our recommendation setting in Figure~\ref{fig:overall_framework}.  
+(More details in Appendix~\ref{app:dataset})
+\vspace{-3mm}
+\subsection{Predictive performance of user model}\label{sec:experiment1}
+\vspace{-3mm} 
+
+To assess the predictive accuracy of GAN user model with position weight (GAN-PW) and LSTM (GAN-LSTM), we choose a series of most widely used or state-of-the-arts as the baselines, including: (1) W\&D-LR~\citep{ChengKocHarmsen16}, a wide \& deep model with logistic regression loss function; (2) CCF~\citep{YanLonSmoEtal11b}, an advanced collaborative filtering model which takes into account the context information in the loss function; we further augment it with wide \& deep feature layer (W\&D-CCF); (3) IKNN~\citep{hidasi2015session}, one of the most popular item-to-item solutions, which calculates items similarly according to the number of co-occurrences in sessions; (4) S-RNN~\citep{HidKarBalTik16}, a session-based RNN model with a pairwise ranking loss; (5) SCKNNC~\citep{jannach2017recurrent}, a strong methods which unify session based RNN and KNN by cascading combination; (6) XGBOOST~\citep{chen2016xgboost}, a parallel tree boosting; (7) DFM~\citep{guo2017deepfm} is a deep neural factorization-machine based on wide \& deep features.
+% To assess the predictive accuracy of GAN user model with position weight (GAN-PW) and LSTM (GAN-LSTM), we choose a series of most widely used or state-of-the-arts as the baselines, including: (1) W\&D-LR~\citep{ChengKocHarmsen16}, a wide \& deep model with logistic regression loss function; (2) CCF~\citep{YanLonSmoEtal11b}, an advanced collaborative filtering model which outperforms standard logistic regression approached by taking into account the context information in the loss function; we further augment it with winde \& deep feature layer (W\&D-CCF); (3) IKNN~\citep{hidasi2015session}, one of the most popular item-to-item solutions, which calculates items similar according to the number of co-occurrences in sessions (this simple method is usually a strong baseline); (4) CKNN~\citep{jannach2017recurrent}, a session-based $k$ nearest neighbors method, which samples past sessions $S$ as neighbors of an item $i$ by computing the similarity $score(i,S):=\sum_{S'\in \gN_S}sim(S,S')\cdot\1(i\in S')$; (5) SRNN~\citep{HidKarBalTik16}, a session-based RNN model with a pairwise ranking loss; (6) SCKNNW~\citep{jannach2017recurrent} and (7) SCKNNC~\citep{jannach2017recurrent}, two methods which unify SRNN and CKNN by weighted combination and cascading combination respectively; (8) XGBOOST~\citep{chen2016xgboost}, a parallel tree boosting, which is also known as GBDT and GBM. 
+
+% \xc{Hui: I summarize your descriptions of the baselines as the above lines. could you please help to check whether it is correct and modify it if needed?}
+
+
+% \Li{
+% {\bf (3) Item-KNN(IKNN).} IKNN is one of the most popular item-to-item solutions, which calculates items similar according to the number of co-occurrences in sessions. This simple method is usually a strong baseline~\citep{hidasi2015session}.
+% {\bf (4) Context-KNN(CKNN).} CKNN is a session-based $k$ nearest neighbors method, the similarity of the specify item $i$ and session $s$ is defined as $score(i, s_1)=\sum_{s_2 \in \gN_{s_1}} sim(s_1, s_2) * \mathds{1}(s_2, i)$, where $\gN_s$ is the k nearest neighbors of session $s$ and $\mathds{1}(s_2, i)=1$ if session $s_2$ contains item $i$ and 0 otherwise.\red{I am not sure the symbol $\mathds{1}$ is correct here. }
+% {\bf (5) Session-Based RNN(SRNN).} SRNN is a session-based recurrent neural network with a ranking loss by optimizing the relative rank $\frac{1}{|\gN_{s}|}\sum_{j=1}^{|\gN_{s}|}\sigma(\hat{r}_{s,j}>\hat{r}_{s,i})$, where $\sigma$ is approximate with a sigmoid, $\hat{r}_{s,i}$ is the predicted score on item $i$ when given session $s$, $i$ is the desired item and $j$ is the negative sample.
+% {\bf (6) SCKNNW } and {\bf (7) SCKNNC} are the methods combining both session-based RNN and context-KNN, which are weighted and cascading combinations respectively.
+% {\bf (8) XGBOOST } is a parallel tree boosting~\citep{chen2016xgboost}, which is also known as GBDT and GBM.
+
+% }
+
+% In this section, we want to evaluate the predictive performance of each user model. More precisely, given the user's states $\vs^t$, how accurately can each model predict the next item clicked by the user? 
+Top-$k$ precision (Prec@$k$) is employed as the evaluation metric. It is the proportion of top-$k$ ranked items at each page view that are actually clicked by the user, averaged across test page views and users. Users are randomly divided into train(50\%), validation(12.5\%) and test(37.5\%) subsets for 3 times. The results are reported in Table~\ref{tb:user_model}, which shows that {\small GAN} model performs significantly better than baseline models. Moreover, {\small GAN-PW} performs nearly as well as {\small GAN-LSTM}, but it is more efficient to train. \emph{Thus we use {\small GAN-PW} for later experiments and simply refer to it as {\small GAN}.} 
+
+%\begin{itemize}[noitemsep,nolistsep,leftmargin=*]
+%\item {\bf NLL} is the negative log-likelihood loss value averaged over all users in the test set, $\frac{1}{N}\sum_{u=1}^{N}\frac{1}{T_u}\sum_{t=1}^{T_u} -\log p_{u,i^*}^t$, where $i^*$ is the item clicked by the user observed in the data, $T_u$ is number of events associated with user $u$ and $p_{u,i^*}^t$ is the probability that $u$ clicks item $i^*$ at time $t$. Different user models formulate the probability $p_{u,i^*}^t$ in different ways.
+
+% {\bf Prec@k} is top-$k$ precision. When a user clicks on one of the displayed items, we count it as an event. For each event, the user model can rank the displayed items by likelihood. Prec@k is the proportion of top-$k$ likelihood items that are truly clicked by the user. An average is taken over all events for each user first before average over all users.
+%\end{itemize}
+
+\begin{table}[ht!]
+\vspace{-2mm}
+\caption{\small Comparison of predictive performances, where we use Shannon entropy for {\scriptsize GAN-PW} and {\scriptsize GAN-LSTM}.} 
+\label{tb:user_model}
+\vspace{-5mm}
+\begin{center}
+\resizebox{\textwidth}{!}{\begin{tabular}{c|cc|cc|cc}
+\hline
+& \multicolumn{2}{c}{(1) Ant Financial news dataset} & \multicolumn{2}{|c}{(2) MovieLens dataset} & \multicolumn{2}{|c}{(3) LastFM}\\
+\hline 
+Model  & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2
+\\
+\hline
+IKNN & 20.6($\pm$0.2) & 32.1($\pm$0.2) & 38.8($\pm$1.9) & 40.3($\pm$1.9) & 20.4($\pm$0.6) & {32.5($\pm$1.4)}\\
+S-RNN & 32.2($\pm$0.9) & 40.3($\pm$0.6) & 39.3($\pm$2.7) & 42.9($\pm$3.6) & 9.4($\pm$1.6) & 17.4($\pm$0.9)\\
+SCKNNC & 34.6($\pm$0.7) & 43.2($\pm$0.8) & 49.4($\pm$1.9) & 51.8($\pm$2.3) & {21.4($\pm$0.5)} & 26.1($\pm$1.0)\\
+XGBOOST & 41.9($\pm$0.1) & 65.4($\pm$0.2) & 66.7($\pm$1.1) & 76.0($\pm$0.9) & 10.2($\pm$2.6) & 19.2($\pm$3.1) \\
+DFM & 41.7($\pm$0.1) & 64.2($\pm$0.2) & 63.3($\pm$0.4) & 75.9($\pm$0.3) & 10.5($\pm$0.4) & 20.4($\pm$0.1) \\
+W\&D-LR    & 37.5($\pm$0.2) & 60.9($\pm$0.1)  &61.5($\pm$0.7) &73.8($\pm$1.2) & 7.6($\pm$2.9) & 16.6($\pm$3.3)\\
+W\&D-CCF   & 37.7($\pm$0.1) & 61.1($\pm$0.1) &65.7($\pm$0.8)& 75.2($\pm$1.1) & 15.4($\pm$2.4) & 25.7($\pm$2.6) \\
+\hline
+{\small GAN-PW}  &{41.9}($\pm$0.1) &{65.8}($\pm$0.1)  &{66.6}($\pm$0.7) & {75.4}($\pm$1.3) & {\bf 24.1}($\pm$0.8) & {\bf 34.9}($\pm$0.7)\\
+{\small GAN-LSTM} & {\bf 42.1}($\pm$0.2) & {\bf 65.9}($\pm$0.2) & {\bf 67.4}($\pm$0.5) & {\bf 76.3}($\pm$1.2) & {24.0}($\pm$0.9) & {34.9}($\pm$0.8)\\
+\hline 
+% {\small GAN-LSTM-L2} & 41.5 & 65.1 & 67.2 & 76.1 & {\bf 24.1} & {\bf 34.9}\\
+% {\small GAN-LSTM-CE} & 40.1 & 63.3 & 67.3 & {\bf 76.3} & {\bf 24.1} & {\bf 34.9}\\
+\hline
+& \multicolumn{2}{|c}{(4) Yelp} & \multicolumn{2}{|c}{(5) Taobao } & \multicolumn{2}{|c}{(6) RecSys15: YooChoose} \\
+\hline 
+Model  & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2
+\\
+\hline
+IKNN & 57.7($\pm$1.8) & 73.5($\pm$1.8) & 32.8($\pm$2.6) & 46.6($\pm$2.6) & 39.3($\pm$1.5) & 69.8($\pm$2.1)\\
+S-RNN & 67.8($\pm$1.4) & 73.2($\pm$0.9) & 32.7($\pm$1.7) & 47.0($\pm$1.4) & 41.8($\pm$1.2) & 69.9($\pm$1.9)\\
+SCKNNC & 60.3($\pm$4.5) & 71.6($\pm$1.8) & 35.7($\pm$0.4) & 47.9($\pm$2.1) & 40.8($\pm$2.5) & 70.4($\pm$3.8)\\
+XGBOOST & 64.1($\pm$2.1) & 79.6($\pm$2.4) & 30.2($\pm$2.5) & { 51.3($\pm$2.6)}  & { 60.8}($\pm$0.4) & {80.3}($\pm$0.4)\\
+DFM & 72.1($\pm$2.1) & 80.3($\pm$2.1) & 30.1($\pm$0.8) & { 48.5($\pm$1.1)}  & {\bf 61.3}($\pm$0.3) & {\bf 82.5}($\pm$1.5)\\
+W\&D-LR  & 62.7($\pm$0.8) & 86.0($\pm$0.9) &  34.0($\pm$1.1) & 54.6($\pm$1.5)   & 51.9($\pm$0.8) & 75.8($\pm$1.5) \\
+W\&D-CCF & {\bf 73.2}($\pm$1.8) & 88.1($\pm$2.2) & 34.9($\pm$1.1) & 53.3($\pm$1.3) & 52.1($\pm$0.5) & 76.3($\pm$1.5) \\
+\hline
+{\small GAN-PW} &72.0($\pm$0.2) & {\bf 92.5}($\pm$0.5)  & {34.7}($\pm$0.6) & {54.1}($\pm$0.7) & {52.9($\pm$0.7)}  & {75.7($\pm$1.4)}\\
+{\small GAN-LSTM} & {73.0}($\pm$0.2) & 88.7($\pm$0.4) & {\bf 35.9}($\pm$0.6)  & {\bf 55.0}($\pm$0.7) & {52.7($\pm$0.3)} & {75.9($\pm$1.2)}\\
+\hline
+% {\small GAN-LSTM-L2} &{\bf 73.5} &87.9 & 34.2 &51.5 &50.9 & 75.7\\
+% {\small GAN-LSTM-CE} & 73.2 & 87.4 & 30.4 & 48.1 & 51.1 & 75.7\\
+\end{tabular}}
+\end{center}
+\vspace{-4mm}
+\end{table}
+
+We also tested different types of regularization (Table~\ref{tb:user_model2}). In general, Shannon entropy performs well and it is also favored for its closed form solution. However, on the Yelp dataset, we find that $L_2$ regularization $R(\phi) = \|\phi\|_2^2$ leads to a better user model. It is noteworthy that the user model with $L_2$ regularization is trained with Shannon entropy initialization scheme proposed in section~\ref{sec:gan_training}. 
+
+\begin{table}[ht!]
+\vspace{-3mm}
+\begin{center}
+    \caption{{\small GAN user model with SE (Shannon entropy) versus $L_2$ regularization on Yelp dataset.}}
+\label{tb:user_model2}
+\vspace{-3mm}
+\resizebox{0.9\textwidth}{!}{\begin{tabular}{l|cc|cc|cc}
+\hline
+\multicolumn{1}{c}{$ $}&\multicolumn{2}{|c|}{Split 1}&\multicolumn{2}{c|}{Split 2}&\multicolumn{2}{c}{Split 3}\\
+\hline
+Model  & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2 & prec(\%)@1 & prec(\%)@2\\
+\hline
+{\small GAN-LSTM-SE}& 73.1& 88.8 & 72.8 &89.0 & 73.1 & 88.2 \\
+{\small GAN-LSTM-$L_2$}& {\bf 73.5} & {\bf 89.0} & {\bf 78.8} & {\bf 91.5} & {\bf 76.1} & {\bf 91.1} \\
+\hline
+\end{tabular}}
+\end{center}
+\vspace{-4mm}
+\end{table}
+
+Another interesting result on Movielens is shown in Figure~\ref{fg:traj} (see Appendix~\ref{app:exp_usermodel} for similar figures). The blue curve represents a user's actual choices over time. The orange curves are trajectories predicted by {\small GAN} and {\small W\&D-CCF}. Each data point $(t, c)$ represents time step $t$ and the category $c$ of the clicked item.  The upper sub-figure shows that {\small GAN} performs much better as time goes by, while the items predicted by {\small W\&D-CCF} in the lower sub-figure are concentrated on several categories. This indicates a drawback of static models - it fails to capture the evolution of a user's interests. 
+
+\begin{figure}[htbp]
+\vspace{-4mm}
+  \begin{minipage}[c]{0.55\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{user10_new}
+  \end{minipage}\hfill
+  \begin{minipage}[c]{0.45\textwidth}
+    \centering
+    \caption{\small Comparison of the true trajectory (blue) of a user's choices, the simulated trajectory predicted by {\small GAN} model (orange curve in upper sub-figure) and the simulated trajectory predicted by W\&D-CCF (the orange curve in the lower sub-figure) for the same user. $Y$-axis represents 80 categories of movies.
+    } \label{fg:traj}
+  \end{minipage}
+  \vspace{-2mm}
+\end{figure}
+
+\vspace{-4mm}
+\subsection{Recommendation policies generated from user models}\label{sec:experiment2}
+\vspace{-2mm}
+
+With a learned user model, we can immediately derive a greedy policy to recommend $k$ items with the highest estimated likelihood. We will compare the strongest baseline methods {\bf \small W\&D-LR, W\&D-CCF} and {\bf {\small GAN-Greedy}} in this setting. Furthermore, we will learn an RL policy using the cascading Q-networks from section~\ref{sec:rl_policy} ({\bf {\small GAN-CDQN}}). We will compare it with two RL methods: a cascading Q-network trained with $\pm 1$ reward ({\bf {\small GAN-RWD1}}), and an additive Q-network policy~\citep{He2016DeepRL}, {\small $Q(\vs,a_1,\cdots,a_k) := \sum_{j=1}^kQ(\vs,a_j)$}, trained with the learned reward ({\bf {\small GAN-GDQN}}). 
+%our {\small GAN} model provides another insight for recommendation. It is inferred by {\small GAN} model that when a user makes a choice, she will refer to her previous experience on observed items. This means the previous recommendation actions taken by the system can influence the current choice of the user.  It is noteworthy that only {\small GAN} model can help to learn a RL policy, because other models do not consider users' dynamics. 
+
+Since we cannot perform online experiments at this moment, we use collected data from the online news platform to fit a user model, and then use it as a test environment. To make the experimental results trustful and solid, we fit the test model based on a randomly sampled test set of 1,000 users and keep this set isolated. 
+% It is noteworthy that the 20 dimensional feature vectors are user-item cross features, so this user model is learned over user-specific features. 
+% Now we regard these 1,000 users as test users and the fitted model as the test model. 
+% Four recommendation policies(LR, CCF, {\small GAN}, {\small GAN}-DQN) will then be evaluated among test users. 
+The RL policies are learned from another set of 2,500 users without overlapping the test set. The performances are evaluated by two metrics: {(1) \bf Cumulative reward}: For each recommendation action, we can observe a user's behavior and compute her reward $r(\vs^t,a^t)$ using the test model. 
+%In reality we may not be able to know the reward value for the user, but in this experiment it is accessible from test model. However, 
+Note that we never use the reward of test users when we train the RL policy. The numbers shown in Table~\ref{tb:policy_compare2} are the cumulative rewards averaged over time horizon first and then averaged over all users. It can be formulated as {\small$\frac{1}{N}\sum_{u=1}^{N} \frac{1}{T}\sum_{t=1}^T$}$ r^t_u$, where $r^t_u$ is the reward received by user $u$ at time $t$. (2) {\bf CTR (click through rate)}: it is the ratio of the number of clicks and the number of steps it is run. The values displayed in Table~\ref{tb:policy_compare2} are also averaged over 1,000 test users. 
+
+\begin{table}[ht!]
+\vspace{-2.5mm}
+\begin{center}
+    \caption{{\small Comparison of recommendation performance of different policies.}}
+\label{tb:policy_compare2}
+\vspace{-3mm}
+\resizebox{\textwidth}{!}{\begin{tabular}{l|ll|ll|ll}
+\hline
+\multicolumn{1}{c}{$ $}&\multicolumn{2}{|c|}{$k=2$}&\multicolumn{2}{c|}{$k=3$}&\multicolumn{2}{c}{$k=5$}\\
+ \hline
+model  &\multicolumn{1}{c}{reward} &\multicolumn{1}{c|}{{\footnotesize CTR}}&\multicolumn{1}{c}{reward} &\multicolumn{1}{c|}{{\footnotesize CTR}}&\multicolumn{1}{c}{reward} &\multicolumn{1}{c}{{\footnotesize CTR}}
+\\ \hline
+{\small W\&D-LR} &  11.82($\pm$0.38) &  0.38($\pm$0.012)& 14.46($\pm$0.42) & 0.46($\pm$0.013)& 15.18($\pm$0.38)& 0.48($\pm$0.011) \\
+{\small W\&D-CCF} &  17.15($\pm$1.16) & 0.53($\pm$0.034)&  19.93($\pm$1.09) & 0.62($\pm$0.031)& 20.94($\pm$1.03)& 0.65($\pm$0.029)\\
+{\small {\small GAN-Greedy}} & 19.17($\pm$1.20) &  0.58($\pm$0.042)& 21.37($\pm$1.24)  & 0.67($\pm$0.038) & 22.97($\pm$1.22) & 0.71($\pm$0.034)\\
+\hline
+{\small {\small GAN}}{\scriptsize-RWD1} & {22.37}($\pm$0.87)& {0.68}($\pm$0.035) &  {22.17}($\pm$1.07) & 
+{0.68}($\pm$0.031) & {25.15}($\pm$1.04) & {\bf 0.78}($\pm$0.029)\\
+{\small {\small GAN}}{\scriptsize-GDQN} & {21.88}($\pm$0.92)& {0.66}($\pm$0.037) &  {23.60}($\pm$1.06) & 
+{0.72}($\pm$0.034) & {23.19}($\pm$1.17) & {0.70}($\pm$0.033)\\
+{\small {\small GAN}}{\scriptsize-CDQN} & {\bf 22.76}($\pm$0.90)& {\bf 0.69}($\pm$0.037) &  {\bf 24.05}($\pm$0.98) & {\bf 0.74}($\pm$0.032) & {\bf 25.36}($\pm$1.10) & {0.77}($\pm$0.031)\\
+\hline
+\end{tabular}}
+\end{center}
+\vspace{-3mm}
+\end{table}
+Three sets of experiments with different numbers of items in each page view are conducted and the results are summarized in Table~\ref{tb:policy_compare2}. Since users' behaviors are not deterministic, each policy is evaluated repeatedly for 50 times on test users. The results show that: (1) Greedy policy built on {\small GAN} model is significantly better than the policies built on other models. (2) RL policy learned from {\small GAN} is better than the greedy policy. (3) Although {\small GAN-CDQN} is trained to optimize the cumulative reward, the recommendation policy also achieves a higher CTR compared to {\small GAN-RWD1} which directly optimizes $\pm 1$ reward. The learning of {\small GAN-CDQN} may have benefited from the well-known reward shaping effects of the learned continuous reward~\citep{Mataric1994RewardFF,Ng1999PolicyIU,Matignon2006RewardFA}. (4) While the computational cost of {\small GAN-CDQN} is about the same as that of {\small GAN-GDQN} (both are linear in the total number of items), our proposed {\small GAN-CDQN} is a more flexible parametrization and achieved better results, especially when $k$ is larger.
+
+Since Table~\ref{tb:policy_compare2} only shows average values taken over test users, we compare the policies in user level and the results are shown in figure~\ref{fg:policy_compare_rwd}. 
+%In each sub-figure, red curve represents {\small GAN}-DQN policy and blue curve represents the other. 
+{\small GAN-CDQN} policy results in higher averaged cumulative reward for most users. A similar figure which compares the CTR is deferred to Appendix~\ref{app:experiment}. Figure~\ref{fg:q_constraint} shows that the learned cascading Q-networks satisfy constraints in \eqref{eq:constraints} well when $k=5$. 
+
+\begin{figure}[ht!]
+\vspace{-4mm}
+\centering
+\includegraphics[width=\textwidth]{Figs/compare_rwd_5000_2.pdf}	
+\vspace{-7mm}
+\caption{\small Cumulative rewards among 1,000 users under the recommendation policies based on different user models. The experiments are repeated for 50 times and the standard deviation is plotted as the shaded area.}
+\label{fg:policy_compare_rwd}
+\vspace{-3mm}
+\end{figure}
+
+\begin{figure}[ht!]
+\vspace{-2mm}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/Q_constraints3.pdf}
+\vspace{-7mm}    
+\caption{\small Each scatter-plot compares $Q^{j^*}$ with $Q^{5*}$ values in~\eqref{eq:constraints} evaluated at the same set of $k$ recommended items. In the ideal case, all scattered points should lie along the diagonal.}
+\label{fg:q_constraint}
+\vspace{-1mm}
+\end{figure}
+
+\vspace{-3mm}
+\subsection{User model assisted policy adaptation}\label{sec:experiment3}
+\vspace{-2mm}
+
+Former results in section~\ref{sec:experiment1} and \ref{sec:experiment2} have demonstrated that {\small GAN} is a better user model and RL policy based on it can achieve higher CTR compared to other user models, but this user model may be misspecified. In this section, we show that our {\small GAN} model can help an RL policy to quickly adapt to a new user. The RL policy assisted by {\small GAN} user model is compared with other policies that are learned from and adapted to online users: (1) {\bf CDQN with {\small GAN}}: cascading Q-networks which are first trained using the learned {\small GAN} user model from other users and then adapted online to a new user using MAML~\citep{FinAbbLev17}. (2) {\bf CDQN model free}: cascading Q-networks without pre-trained by the {\small GAN} model. It interacts with and adapts to online users directly. (3) {\bf LinUCB}: a classic contextual bandit algorithm which assumes adversarial user behavior. We choose its stronger version - LinUCB with hybrid linear models~\citep{LiChuLanSch10} - to compare with.
+
+The experiment setting is similar to section~\ref{sec:experiment2}. All policies are evaluated on a set of 1,000 test users associated with a test model. 
+%We need to emphasize that the {\small GAN} model which assists the CDQN policy is learned from a training set of users without overlapping test users. It is different from the test model which fits the 1,000 test users. 
+Three sets of results corresponding to different sizes of display set are plotted in Figure~\ref{fg:experiment3}. It shows how the CTR increases as each policy interacts with and adapts to users over time. In fact, the performances of users' cumulative reward according to different policies are also similar, and the corresponding figure is deferred to Appendix~\ref{app:exp_policy3}.
+
+\begin{figure}[htbp]
+\vspace{-4mm}
+    \centering
+    \includegraphics[width=0.95\textwidth]{Figs/policy_compare3_new.pdf}
+    \vspace{-2.0mm}
+\caption{\small Comparison of the averaged click rate averaged over 1,000 users under different recommendation policies. $X$-axis represents how many times the recommender interacts with online users. $Y$-axis is the click rate. Each point $(x,y)$ means the click rate $y$ is achieved after $x$ times of user interactions.}
+\label{fg:experiment3}
+\vspace{-3mm}
+\end{figure}
+
+It can be easily seen that the CDQN policy pre-trained over a {\small GAN} user model can quickly achieve a high CTR even when it is applied to a new set of users (Figure~\ref{fg:experiment3}). Without the user model, CDQN can also adapt to the users during its interaction with them. However, it takes around 1,000 iterations (i.e., 100,000 interactive data points) to achieve similar performance as the CDQN policy assisted by {\small GAN} user model. LinUCB(hybrid) is also capturing users' interests during its interaction with users. Similarly, it takes too many interactions. In Appendix~\ref{app:exp_policy3}, another figure is attached to compare the cumulative reward received by the user instead of CTR. Generally speaking, {\small GAN} user model provides a dynamical environment for RL policies to interact with. It helps the policy achieve a more satisfying status before applying to online users. 
+
+\vspace{-3mm}
+\section{Conclusion and Future Work}
+\vspace{-3mm}
+
+ We proposed a novel model-based reinforcement learning framework for recommendation systems, where we developed a GAN formulation to model user behavior dynamics and her associated reward function. Using this user model as the simulation environment, we develop a novel cascading Q-network for combinatorial recommendation policy which can handle a large number of candidate items efficiently. Although the experiments show clear benefits of our method in an offline and realistic simulation setting, even stronger results could be obtained via future online A/B testing. 
+
+\newpage
+\bibliographystyle{iclr2019_conference}
+\bibliography{bibfile.bib}
+
+\newpage
+
+\appendix
+\section{Lemma}\label{app:proof}
+\subsection{Proof of lemma~\ref{lm:lemma1}} 
+\primelemma*
+\begin{proof}
+First, recall the problem defined in~\eqref{eq:max}:
+\[
+\phi^*(\vs^t,\gA^t) = \arg\max_{\phi \in \Delta^{k-1}} \E_{\phi} \left[r(\vs^t, a^t) \right] -\frac{1}{\eta}R(\phi).
+\]
+Denote $\phi^t = \phi(\vs^t,\gA^t)$. Since $\phi$ can be an arbitrary mapping (i.e., $\phi$ is not limited in a specific parameter space), $\phi^t$ can be an arbitrary vector in $\Delta^{k-1}$. Recall the notation $\gA^t = \{a_1,\cdots, a_k\}$. Then the expectation taken over random variable $a^t\in \gA^t$ can be written as
+\begin{equation}\label{eq:lm1_1}
+     \E_{\phi} \left[r(\vs^t, a^t) \right] -\frac{1}{\eta}R(\phi) =\sum_{i=1}^k \phi_i^tr(\vs^t, a_i) -\frac{1}{\eta} \sum_{i=1}^k \phi_i^t \log \phi_i^t.
+\end{equation}
+By simple computation, the optimal vector $\phi^{t*}\in \Delta^{k-1}$ which maximizes~\eqref{eq:lm1_1} is
+\begin{equation}\label{eq:lm1_2}
+    \phi_i^{t*} =\dfrac{\exp(\eta r(\vs^t, a_i))}{\sum_{j=1}^{k}\exp(\eta r(\vs^t, a_j))},
+\end{equation}
+which is equivalent to~\eqref{eq:max}. Next, we show the equivalence of~\eqref{eq:lm1_2} to the discrete choice model interpreted by~\eqref{eq:gumbel}.
+
+The cumulative distribution function for the Gumbel distribution is $F(\varepsilon;\alpha) = \mathbb{P}[\varepsilon \leqslant \alpha ] = e^{-e^{-\alpha}}$ and the probability density is $f(\varepsilon) = e^{-e^{-\varepsilon}}e^{-\varepsilon} $. Using the definition of the Gumbel distribution, the probability of the event $[a^t = a_i]$ where $a^t$ is defined in~\eqref{eq:gumbel} is 
+\begin{align*}
+    P_i :=  \mathbb{P} \Big[a^t = a_i\Big] &= \mathbb{P} \Big[ \eta r(\vs^t,a_i) +\varepsilon_i \geqslant \eta r(\vs^t,a_j) +\varepsilon_j ,  \text{ for all } i\neq j \Big]\\
+    & =  \mathbb{P} \Big[\varepsilon_j \leqslant\varepsilon_i + \eta r(\vs^t,a_i)-\eta r(\vs^t,a_j),  \text{ for all } i\neq j \Big].
+\end{align*}
+Suppose we know the random variable $\varepsilon_i$. Then we can compute the choice probability $P_i$ conditioned on this information. Let $B_{ij} = \varepsilon_i +\eta r(\vs^t,a_i)-\eta r(\vs^t,a_j) $ and $P_{i|\mathcal{E}}$ be the conditional probability; then we have
+\[
+P_{i|\varepsilon_i} = \prod_{i \neq j} \mathbb{P}[\varepsilon_{j} \leqslant B_{ij}] = \prod_{i \neq j} e^{-e^{-B_{ij}}}.
+\]
+In fact, we only know the density of $\varepsilon_i$. Hence, using the Bayes theorem, we can express $P_i$ as
+\begin{align*}
+P_i & = \int_{-\infty}^{\infty} P_{i|\varepsilon_i} f(\varepsilon_i) \rd \varepsilon_i = \int_{-\infty}^{\infty} \prod_{i \neq j} e^{-e^{-B_{ij}}} f(\varepsilon_i) \rd \varepsilon_i \\
+&  = \int_{-\infty}^{\infty} \prod_{j=1}^k e^{-e^{-B_{ij}}}   e^{e^{-\varepsilon_i}} e^{-e^{-\varepsilon_i}}e^{-\varepsilon_i} \rd \varepsilon_i= \int_{-\infty}^{\infty} \Big( \prod_{j=1}^k e^{-e^{-B_{ij}}} \Big)  e^{-\varepsilon_i} \rd \varepsilon_i
+\end{align*}
+Now, let us look at the product itself.
+\begin{align*}
+\prod_{j=1}^k e^{-e^{-B_{ij}}} & = \exp\Big( -\sum_{j=1}^k e^{-B_{ij}}\Big) \\
+& = \exp \Big( - e^{-\varepsilon_i }\sum_{j=1}^k e^{- (\eta r(\vs^t,a_i)-\eta r(\vs^t,a_j) )} \Big)
+\end{align*}
+Hence 
+\[
+P_i = \int_{-\infty}^{\infty} \exp(-e^{-\varepsilon_i } Q ) e^{-\varepsilon_i} \rd \varepsilon_i
+\]
+    where $Q = \sum_{j=1}^k e^{- (\eta r(\vs^t,a_i)-\eta r(\vs^t,a_j) )}  = Z/\exp(\eta r(\vs^t,a_i) )$. 
+
+Next, we make a change of variable $y = e^{-\varepsilon_i}$. The Jacobian of the inverse transform is $J = \frac{\rd \varepsilon_i}{\rd y} = -\frac{1}{y}$. Since $y>0$, the absolute of Jacobian is $|J| = \frac{1}{y}$. Therefore, 
+\begin{align*}
+P_i & = \int_{0}^{\infty} \exp(-Q y) y |J| \rd y=\int_{0}^{\infty} \exp(-Q y)\rd y	\\
+& = \frac{1}{Q} = \frac{1}{\exp(-\eta r(\vs^t,a_i)) \sum_j \exp(\eta r(\vs^t,a_j))}\\
+& = \dfrac{\exp(\eta r(\vs^t, a_i)}{\sum_{j=1}^k \exp(\eta r(\vs^t, a_j))}.
+\end{align*}
+\end{proof}
+\subsection{Proof of lemma~\ref{lm2:mle}} 
+\secondlemma*
+\begin{proof}This lemma is a straight forward result of lemma~\ref{lm:lemma1}.
+First, recall the problem defined in~\eqref{eq:std-minmax}:
+\[
+\min_{\theta \in \Theta} \left(\max_{\phi\in \Phi}  \E_{\phi} \left[\sum_{t=1}^Tr_{\theta}(\vs^t_{true}, a^t)\right] -\frac{1}{\eta}R(\phi)\right)-\sum_{t=1}^T r_{\theta}(\vs^t_{true}, a^t_{true})
+	\]
+We make a assumption that there is no repeated pair $(\vs^t_{true}, a^t)$ in~\eqref{eq:std-minmax}. This is a very soft assumption because $\vs^t_{true}$ is updated overtime, and $a^t$ is in fact representing its feature vector $\vf^t_{a^t}$, which is in space $\mathbb{R}^d$. With this assumption, we can let $\phi$ map each pair $(\vs^t_{true}, a^t)$ to the optimal vector $\phi^{t*}$  which maximize $r_{\theta}(\vs^t_{true}, a^t) -\frac{1}{\eta}R(\phi^t)$ since there is no repeated pair. Using~\eqref{eq:lm1_2}, we have
+\begin{align*}
+&\max_{\phi\in \Phi}  \E_{\phi} \left[\sum_{t=1}^Tr_{\theta}(\vs^t_{true}, a^t)\right] -\frac{1}{\eta}R(\phi) = \max_{\phi\in \Phi} \sum_{t=1}^T \E_{\phi} \left[r_{\theta}(\vs^t_{true}, a^t) \right]-\frac{1}{\eta}R(\phi) \\
+    =& \sum_{t=1}^T\left(   \sum_{i=1}^k \phi_i^{t*}r(\vs^t, a_i) -\frac{1}{\eta} \sum_{i=1}^k \phi_i^{t*} \log \phi_i^{t*} \right)=\sum_{t=1}^T\frac{1}{\eta}\log\Big(\sum_{i=1}^k \exp(\eta r_{\theta}(\vs^t_{true}, a_i))\Big).
+\end{align*}~\eqref{eq:std-minmax} can then be written as
+\[
+\min_{\theta\in\Theta}\sum_{t=1}^T\frac{1}{\eta}\log\Big(\sum_{i=1}^k \exp(\eta r_{\theta}(\vs^t_{true}, a_i))\Big) - \sum_{t=1}^T r_{\theta}(\vs^t_{true}, a^t_{true}),
+\]
+which is the negative log-likelihood function and is equivalent to lemma~\ref{lm2:mle}.
+\end{proof}
+
+\section{Alogrithm box}\label{app:algo}
+The following is the algorithm of learning the cascading deep Q-networks. We employ the cascading $Q$ functions to search the optimal action efficiently (line~\ref{line:argmax}). Besides, both the experience replay~\citep{MniKavSilGraetal13} and $\varepsilon$-exploration techniques are applied. The system's experiences at each time-step are stored in a replay memory set $\gM$ (line~\ref{line:exp_replay1}) and then a minibatch of data will be sampled from the replay memory to update $\widehat{Q^j}$ (line~\ref{line:exp_replay2} and~\ref{line:exp_replay3}). An exploration to the action space is executed with probability $\varepsilon$ (line~\ref{line:epsilon-greedy}).
+
+\begin{algorithm}[ht!]
+\caption{cascading deep Q-learning (CDQN) with Experience Replay}
+\label{alg:dqn}
+\begin{algorithmic}[1]
+\State Initialize replay memory $\gM$ to capacity $N$ 
+\State Initialize parameter $\Theta_j$ of $\widehat{Q^j}$ with random weights for each $1\leq j\leq k$
+\For{iteration $i=1$ to $L$}
+	\State Sample a batch of users $\gU$ from training set
+	\State Initialize the states ${\vs}^0$ to a zero vector for each $u\in \gU$
+	\For{$t=1$ to $T$}
+	    \For{each user $u\in \gU$ simultaneously}
+	        \State With probability $\varepsilon$ select a random subset $\gA^t$ of size $k$\label{line:epsilon-greedy}
+		    \State Otherwise, $\displaystyle \gA^t =
+	\textsc{argmax\_Q}(\vs_u^t, \gI^t, \Theta_1,\cdots,\Theta_k)$\label{line:argmax}
+ 		    \State Recommend $\gA^t$ to user $u$, observe user action $a^t\sim\phi(\vs^t,\gA^t)$ and update user state $\vs^{t+1}$
+		    \State Add tuple $\big(\vs^t, \gA^t, r(\vs^t, a^t), \vs^{t+1}\big)$ to $\gM$\label{line:exp_replay1}
+		\EndFor
+		\State Sample random minibatch $B\overset{\text{iid.}}{\sim}\gM$\label{line:exp_replay2}
+		\State For each $j$, update $\Theta_j$ by SGD over the loss $\big(y- \widehat{Q^j}(\vs^t, A^t_{1:j}; \Theta_j)\big)^2$ for $B$\label{line:exp_replay3}
+	\EndFor
+\EndFor
+\State \Return $\Theta_1,\cdots,\Theta_k$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Dataset description}\label{app:dataset}
+{\bf (1) MovieLens public dataset}\footnote{https://grouplens.org/datasets/movielens/} contains large amounts of movie ratings collected from their website. We randomly sample 1,000 active users from this dataset. On average, each of these active users rated more than 500 movies (including short films), so we assume they rated almost every movie that they watched and thus equate their rating behavior with watching behavior. MovieLens dataset is the most suitable public dataset for our experiments, but it is still not perfect. In fact, none of the public datasets provides the context in which a user's choice is made. Thus, we simulate this missing information in a reasonable way. For each movie watched(rated) on the date $d$, we collect a list of movies released within a month before that day $d$. On average, movies run for about four weeks in theater. Even though we don't know the actual context of user's choice, at least the user decided to watch the rated movie instead of other movies in theater. Besides, we control the maximal size of each displayed set by 40. {\bf Features:} In MovieLens dataset, only titles and IDs of the movies are given, so we collect detailed movie information from Internet Movie Database(IMDB). Categorical features as encoded as sparse vectors and descriptive features are encoded as dense vectors. The combination of such two types of vectors produces 722 dimensional raw feature vectors. To further reduce dimensionality, we use logistic regression to fit a wide\&deep networks~\citep{ChengKocHarmsen16} and use the learned input and hidden layers to reduce the feature to 10 dimension.
+
+{\bf (2) An online news article recommendation dataset from Ant Financial} is anonymously collected from Ant Financial news article online platform. It consists of 50,000 users' clicks and impression logs for one month, involving dozens of thousands of news. It is a time-stamped dataset which contains user features, news article features and the context where the user clicks the articles. The size of the display set is not fixed, since a user can browse the news article platform as she likes. On average a display set contains 5 new articles, but it actually various from 2 to 10.  {\bf Features:} The news article raw features are approximately of dimension 100 million because it summarizes the key words in the article. Apparently it is too expensive to use these raw features in practice. The features we use in the experiments are 20 dimensional dense vector embedding produced from the raw feature by wide\&deep networks. 
+% ensembling the results of multiple score functions whose structures are comparatively simple. 
+The reduced 20 dimensional features are widely used in this online platform and revealed to be effective in practice.
+
+{\bf (3) Last.fm}\footnote{https://www.last.fm/api} contains listening records from 359,347 users. Each display set is simulated by collecting 9 songs with nearest time-stamp. 
+
+{\bf (4) Yelp}\footnote{https://www.yelp.com/dataset/} contains users' reviews to various businesses. Each display set is simulated by collecting 9 businesses with nearest location. 
+
+{\bf (5) RecSys15}\footnote{https://2015.recsyschallenge.com/} contains click-streams that sometimes end with purchase events. 
+
+{\bf (6) Taobao}\footnote{https://tianchi.aliyun.com/datalab} contains the clicking behavior and buying behavior of users in 22 days. We consider the buying behaviors as positive events.
+\section{More figures for experimental results}\label{app:experiment}
+
+
+% \subsection{Figures for section~\ref{sec:experiment1}}\label{app:exp_usermodel_table}
+% \begin{table}[ht!]
+% \vspace{-1mm}
+% \caption{\small Predictive performance evaluation: loss and precision of LR, CCF and {\small GAN} models assessed on a test set of 25,000 users for the news article dataset and 500 users for MovieLens dataset.}
+% \label{tb:appendix_user_model}
+% \vspace{-3mm}
+% \begin{center}
+% \resizebox{\textwidth}{!}{\begin{tabular}{c|ccc|ccc}
+% \hline
+% & \multicolumn{3}{c}{(1) Ant Financial news dataset} & \multicolumn{3}{|c}{(2) MovieLens dataset}\\
+% \hline 
+% Model  &\multicolumn{1}{c}{NLL} & prec@1 & prec@2 & \multicolumn{1}{c}{NLL} & prec@1 & prec@2 
+% \\
+% \hline
+% LR    &2.017($\pm$0.007) & 0.375($\pm$0.002) & 0.609($\pm$0.001) &0.743($\pm$0.001) &0.615($\pm$0.007) &0.738($\pm$0.012) \\
+% CCF    &1.457($\pm$0.003) & 0.377($\pm$0.001) & 0.611($\pm$0.001) &1.164($\pm$0.009)&0.657($\pm$0.008)& 0.752($\pm$0.011)\\
+% {\small GAN}({\footnotesize {\small PW}}) & {\bf 1.368}($\pm$0.001) & {\bf 0.419}($\pm$0.001) & {\bf 0.658}($\pm$0.001) & {\bf 1.141}($\pm$0.013) & {\bf 0.666}($\pm$0.007) & {\bf 0.754}($\pm$0.013)\\
+% {\small GAN}({\small LSTM}) & {\bf 1.365}($\pm$0.001) & {\bf 0.421}($\pm$0.002) & {\bf 0.659}($\pm$0.002) & {\bf 1.124}($\pm$0.021) & {\bf 0.674}($\pm$0.005) & {\bf 0.763}($\pm$0.012)\\
+% \hline 
+% & \multicolumn{3}{c}{(3) lastfm} & \multicolumn{3}{|c}{(4) yelp}\\
+% \hline 
+% Model  &\multicolumn{1}{c}{NLL} & prec@1 & prec@2 & \multicolumn{1}{c}{NLL} & prec@1 & prec@2 
+% \\
+% \hline
+% LR & & & &2.60 & 0.286 & 0.526    \\
+% CCF & & & &1.73 & 0.307 & 0.494   \\
+% {\small GAN}({\footnotesize {\small PW}}) \\
+% {\small GAN}({\small LSTM}) &  \\
+% \hline 
+% & \multicolumn{3}{c}{(5) RecSys15: YooChoose} & \multicolumn{3}{|c}{(6) taobao}\\
+% \hline 
+% Model  &\multicolumn{1}{c}{NLL} & prec@1 & prec@2 & \multicolumn{1}{c}{NLL} & prec@1 & prec@2 
+% \\
+% \hline
+% LR    &0.922& 0.519 & 0.758 & 2.38 & 29.6 & 46.7   \\
+% CCF    &0.973 & 0.503 & 0.748 & 1.61&28.9 & 49.4 \\
+% {\small GAN}({\footnotesize {\small PW}}) & {\bf 0.934} & {\bf 0.539}  & {\bf 0.759} &1.62 & 31.5 & 51.9\\
+% {\small GAN}({\small LSTM}) & {\bf 0.936} & {\bf 0.527} & {\bf 0.768} & {\bf 1.61} & 30.8 & 48.9\\
+% \hline
+% \end{tabular}}
+% \end{center}
+% \vspace{-3mm}
+% \end{table}
+
+\subsection{Figures for section~\ref{sec:experiment1}}\label{app:exp_usermodel}
+An interesting comparison is shown in Figure~\ref{fg:traj} and more similar figures are provided here. The blue curve is the trajectory of a user's actual choices of movies over time. The orange curves are simulated trajectories predicted by {\small GAN} and CCF, respectively. Similar to what we conclude in section~\ref{sec:experiment1}, these figures reveal the good performances of {\small GAN} user model in terms of capturing the evolution of users' interest. 
+\begin{figure}[htbp]
+  \begin{minipage}[c]{0.47\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{user18_new}
+  \end{minipage}\hfill
+  \begin{minipage}[c]{0.52\textwidth}
+    \centering
+        \includegraphics[width=\textwidth]{user19_new}
+  \end{minipage}
+  \caption{\small Two more examples: comparison of the true trajectory(blue) of user's choices, the simulated trajectory predicted by {\small GAN} model (orange curve in upper sub-figure) and the simulated trajectory predicted by CCF (orange curve in the lower sub-figure) for the same user. $Y$-axis represents 80 categories of movies.
+    }
+\end{figure}
+
+
+\subsection{Figures for section~\ref{sec:experiment2}}\label{app:exp_policy2}
+ We demonstrate the policy performance in user level in figure~\ref{fg:policy_compare_rwd} by comparing the cumulative reward. Here we attach the figure which compares the click rate. In each sub-figure, red curve represents {\small GAN}-DQN policy and blue curve represents the other. {\small GAN}-DQN policy contributes higher averaged click rate for most users.
+\begin{figure}[ht!]
+\centering
+\includegraphics[width=\textwidth]{Figs/compare_clc_5000.pdf}	
+\caption{\small Comparison of click rates among 1,000 users under the recommendation policies based on different user models. In each figure, red curve represents {\small GAN}-DQN policy and blue curve represents the other. The experiments are repeated for 50 times and standard deviation is plotted as the shaded area. This figure is similar to figure~\ref{fg:policy_compare_rwd}, except that it plots the value of click rates instead of user's cumulative rewards.}
+\end{figure}
+
+\subsection{Figures for section~\ref{sec:experiment3}}\label{app:exp_policy3}
+This figure shows three sets of results corresponding to different sizes of display set. It reveals how users' cumulative reward(averaged over 1,000 users) increases as each policy interacts with and adapts to 1,000 users over time. It can be easily that the CDQN policy pre-trained over a {\small GAN} user model can adapt to online users much faster then other model-free policies and can reduce the risk of losing the user at the beginning. The experiment setting is similar to section~\ref{sec:experiment2}. All policies are evaluated on a separated set of 1,000 users associated with a test model. We need to emphasize that the {\small GAN} model which assists the CDQN policy is learned from a training set of users without overlapping test users. It is different from the test model which fits the 1,000 test users. 
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{Figs/policy_compare3_rwd.pdf}
+\caption{\small Comparison of the averaged cumulative reward among 1,000 users under different adaptive recommendation policies. $X$-axis represents how many times the recommender interacts with online users. Here the recommender interact with 1,000 users each time, so in fact each interaction represents 100 online data points. $Y$-axis is the click rate. Each point $(x,y)$ in this figure means a click rate $y$ is achieved after $x$ many times of interactions with the users. }
+\end{figure}
+\end{document}
